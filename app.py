@@ -94,42 +94,59 @@ with st.form("add_set"):
         save_row(row)
         st.success("Zapisano serię ✅")
 
+# --- HISTORIA I ZARZĄDZANIE DANYMI ---
 st.subheader("Historia")
 df = load_data()
+
+# pomocnicza funkcja zapisu całego df
+def save_df(_df, path=CSV_PATH):
+    _df.to_csv(path, index=False)
+    load_data.clear()
+
 if df.empty:
     st.info("Brak danych — dodaj pierwszą serię powyżej.")
 else:
+    # Filtry widoku
     c1, c2, c3 = st.columns(3)
     ex_filter = c1.selectbox("Filtr ćwiczenia", ["Wszystkie"] + sorted(df['exercise'].dropna().unique().tolist()))
     from_date = c2.date_input("Od", df['date'].min())
     to_date = c3.date_input("Do", df['date'].max())
+
     view = df.copy()
     view = view[(view['date'] >= from_date) & (view['date'] <= to_date)]
     if ex_filter != "Wszystkie":
         view = view[view['exercise'] == ex_filter]
+
     st.dataframe(view.sort_values('date', ascending=False), use_container_width=True)
 
-    import altair as alt
-    view['week_num'] = view['date'].apply(lambda d: f"{d.isocalendar().year}-W{d.isocalendar().week}")
-    view['tonnage'] = view['weight_kg'] * view['reps']
-    weekly = view.groupby(['week_num','exercise'], as_index=False).agg({'tonnage':'sum','reps':'sum'})
+    # Zarządzanie historią
+    with st.expander("Zarządzanie historią"):
+        st.caption("Wybierz wiersze do usunięcia lub wyczyść całą historię.")
 
-    st.subheader("Tygodniowa objętość (tonnage)")
-    if not weekly.empty:
-        chart = alt.Chart(weekly).mark_bar().encode(
-            x='week_num:N', y='tonnage:Q', color='exercise:N', tooltip=['week_num','exercise','tonnage','reps']
-        ).properties(height=300)
-        st.altair_chart(chart, use_container_width=True)
+        # etykiety do wyboru (na pełnym df, nie tylko przefiltrowanym widoku)
+        labels = {
+            i: f"{i} | {row['date']} | {row['exercise']} | {row['weight_kg']} kg × {row['reps']} | RIR {row['rir']}"
+            for i, row in df.reset_index().rename(columns={'index':'_idx'}).iterrows()
+        }
+        # multiselect po indeksach oryginalnego df
+        idx_options = list(range(len(df)))
+        selected_idx = st.multiselect(
+            "Zaznacz wiersze do usunięcia",
+            options=idx_options,
+            format_func=lambda i: labels.get(i, str(i))
+        )
 
-    st.subheader("Szacowany 1RM (Epley)")
-    view['est_1rm'] = view.apply(lambda r: float(r['weight_kg']) * (1 + float(r['reps'])/30.0) if pd.notnull(r['weight_kg']) and pd.notnull(r['reps']) else None, axis=1)
-    one_rm = view.dropna(subset=['est_1rm']).groupby(['date','exercise'], as_index=False)['est_1rm'].max()
-    if not one_rm.empty:
-        line = alt.Chart(one_rm).mark_line(point=True).encode(
-            x='date:T', y='est_1rm:Q', color='exercise:N', tooltip=['date','exercise','est_1rm']
-        ).properties(height=300)
-        st.altair_chart(line, use_container_width=True)
-
-if not df.empty:
-    csv = df.to_csv(index=False).encode('utf-8')
-    st.download_button("Pobierz CSV", data=csv, file_name="workouts_export.csv", mime="text/csv")
+        cdel, cclear = st.columns(2)
+        if cdel.button("Usuń zaznaczone wiersze 🗑️"):
+            base = load_data().copy()
+            base = base.drop(index=selected_idx, errors="ignore").reset_index(drop=True)
+            save_df(base)
+            st.success(f"Usunięto {len(selected_idx)} wierszy.")
+            st.rerun()  # natychmiastowe odświeżenie widoku
+        if cclear.button("Wyczyść wszystko ❌", type="primary"):
+            # zostaw nagłówki, wyczyść zawartość
+            empty = pd.DataFrame(columns=["date","week","day","workout","exercise","weight_kg","reps","rir","notes"])
+            save_df(empty)
+            st.success("Historia została wyczyszczona.")
+            st.rerun()
+            
